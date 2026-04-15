@@ -1252,7 +1252,7 @@ bool tty_configure_from_fd(int fd)
      * hasn't been initialised by a prior open.  Falls back to memset on
      * error (pre-connect reconfigure path passes fd == -1).            */
     if (fd >= 0 && tcgetattr(fd, &tio) < 0)
-        memset(&tio, 0, sizeof(tio));
+        ;
     else if (fd < 0)
         memset(&tio, 0, sizeof(tio));
 
