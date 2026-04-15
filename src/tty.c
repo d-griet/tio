@@ -1260,7 +1260,7 @@ bool tty_configure_from_fd(int fd)
     if (fd >= 0 && tcgetattr(fd, &tio) < 0)
     {
         /* tcgetattr failed - initialize with safe defaults */
-        tio_debug_printf("tcgetattr failed (%s), initializing with defaults", strerror(errno));
+        // tio_debug_printf("tcgetattr failed (%s), initializing with defaults", strerror(errno));
         
         /* Start with a clean raw configuration as baseline */
         cfmakeraw(&tio);
@@ -2595,11 +2595,20 @@ int tty_connect(void)
     tty_output_mode_set(option.output_mode);
 
     /* Save current port settings */
-    if (tcgetattr(device_fd, &tio_old) < 0)
-    {
-        tio_error_printf_silent("Could not get port settings (%s)", strerror(errno));
-        goto error_tcgetattr;
-    }
+    #if defined(__CYGWIN__) || defined(__MSYS__) || defined(_WIN32)
+        if (tcgetattr(device_fd, &tio_old) < 0 && errno != EINVAL)
+    #else
+        if (tcgetattr(device_fd, &tio_old) < 0)
+    #endif
+        {
+            // tio_debug_printf("Could not get port settings (%s), using defaults", strerror(errno));
+            /* Initialize tio_old with safe defaults instead of failing */
+            cfmakeraw(&tio_old);
+            tio_old.c_cflag |= CLOCAL | CREAD | CS8;
+            tio_old.c_iflag = 0;
+            tio_old.c_oflag = 0;
+            tio_old.c_lflag = 0;
+        }
 
     /* Rebuild tio using the live fd as baseline — critical for cold-start
      * ports on Windows/MSYS2 that the driver hasn't fully initialised.  */
@@ -2721,7 +2730,8 @@ int tty_connect(void)
                 /* Input from tty device ready */
                 /*******************************/
 
-                ssize_t bytes_read = read(device_fd, input_buffer, BUFSIZ);
+                ssize_t bytes_read;// = read(device_fd, input_buffer, BUFSIZ);
+                bytes_read = read(device_fd, input_buffer, BUFSIZ);
                 if (bytes_read <= 0)
                 {
                     /* Error reading - device is likely unplugged */
@@ -3024,7 +3034,6 @@ int tty_connect(void)
 
 error_setspeed:
 error_tcsetattr:
-error_tcgetattr:
 error_read:
     tty_disconnect();
 error_open:
