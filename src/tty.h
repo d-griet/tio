@@ -74,7 +74,8 @@ extern bool interactive_mode;
 
 void stdout_configure(void);
 void stdin_configure(void);
-void tty_configure(void);
+// void tty_configure(void);
+void tty_configure_from_fd(int fd);
 void tty_reconfigure(void);
 int tty_connect(void);
 void tty_wait_for_device(void);

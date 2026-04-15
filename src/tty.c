@@ -1242,12 +1242,66 @@ void stdout_configure(void)
     atexit(&stdout_restore);
 }
 
-void tty_configure(void)
+void tty_configure_from_fd(int fd)
 {
     int status;
     speed_t baudrate;
 
-    memset(&tio, 0, sizeof(tio));
+    /* 
+     * Cold-start handling for Windows/MSYS2:
+     * 
+     * On Windows/MSYS2, tcgetattr() may fail with EINVAL on a "cold" serial 
+     * port that hasn't been initialized by a prior native Windows application.
+     * Instead of zeroing the structure (which creates invalid termios state),
+     * we initialize with a known-good baseline using cfmakeraw() and then
+     * apply our specific configuration on top.
+     */
+#if defined(__CYGWIN__) || defined(__MSYS__) || defined(_WIN32)
+    if (fd >= 0 && tcgetattr(fd, &tio) < 0)
+    {
+        /* tcgetattr failed - initialize with safe defaults */
+        // tio_debug_printf("tcgetattr failed (%s), initializing with defaults", strerror(errno));
+        
+        /* Start with a clean raw configuration as baseline */
+        cfmakeraw(&tio);
+        
+        /* Ensure critical c_cflag bits are set for basic operation */
+        tio.c_cflag |= CLOCAL | CREAD;
+        
+        /* Set reasonable defaults for flags that cfmakeraw may not fully initialize */
+        tio.c_cflag &= ~CSIZE;
+        tio.c_cflag |= CS8;           /* 8 data bits */
+        tio.c_cflag &= ~CSTOPB;       /* 1 stop bit */
+        tio.c_cflag &= ~PARENB;       /* No parity */
+        tio.c_cflag &= ~CRTSCTS;      /* No hardware flow control */
+        
+        tio.c_iflag &= ~(IXON | IXOFF | IXANY);  /* No software flow control */
+        tio.c_oflag = 0;
+        tio.c_lflag = 0;
+        
+        /* Control characters - blocking read, no timeout */
+        tio.c_cc[VTIME] = 0;
+        tio.c_cc[VMIN]  = 1;
+    }
+    else if (fd >= 0)
+    {
+        /* tcgetattr succeeded - use existing settings as baseline */
+        /* Control, input, output, local modes for tty device */
+        tio.c_cflag |= CLOCAL | CREAD;
+    }
+    else
+    {
+        /* Pre-connect path (fd == -1) - initialize from scratch */
+        cfmakeraw(&tio);
+        tio.c_cflag |= CLOCAL | CREAD;
+    }
+#else
+    /* Linux/macOS/other POSIX: original behavior */
+    if (fd >= 0 && tcgetattr(fd, &tio) < 0)
+        memset(&tio, 0, sizeof(tio));
+    else if (fd < 0)
+        memset(&tio, 0, sizeof(tio));
+#endif
 
     /* Set speed */
     switch (option.baudrate)
@@ -1412,7 +1466,8 @@ void tty_configure(void)
 
 void tty_reconfigure(void)
 {
-    tty_configure();
+    // tty_configure();
+    tty_configure_from_fd(connected ? device_fd : -1);
 
     if (connected)
     {
@@ -2361,7 +2416,7 @@ void tty_wait_for_device(void)
                 // Happens when port unpluged
                 if (errno == EACCES)
                 {
-                    goto error;
+                    break;
                 }
 #elif defined(__APPLE__)
                 if (errno == EBADF)
@@ -2579,11 +2634,24 @@ int tty_connect(void)
     tty_output_mode_set(option.output_mode);
 
     /* Save current port settings */
-    if (tcgetattr(device_fd, &tio_old) < 0)
-    {
-        tio_error_printf_silent("Could not get port settings (%s)", strerror(errno));
-        goto error_tcgetattr;
-    }
+    #if defined(__CYGWIN__) || defined(__MSYS__) || defined(_WIN32)
+        if (tcgetattr(device_fd, &tio_old) < 0 && errno != EINVAL)
+    #else
+        if (tcgetattr(device_fd, &tio_old) < 0)
+    #endif
+        {
+            // tio_debug_printf("Could not get port settings (%s), using defaults", strerror(errno));
+            /* Initialize tio_old with safe defaults instead of failing */
+            cfmakeraw(&tio_old);
+            tio_old.c_cflag |= CLOCAL | CREAD | CS8;
+            tio_old.c_iflag = 0;
+            tio_old.c_oflag = 0;
+            tio_old.c_lflag = 0;
+        }
+
+    /* Rebuild tio using the live fd as baseline — critical for cold-start
+     * ports on Windows/MSYS2 that the driver hasn't fully initialised.  */
+    tty_configure_from_fd(device_fd);
 
 #ifdef HAVE_IOSSIOSPEED
     if (!standard_baudrate)
@@ -3004,7 +3072,6 @@ int tty_connect(void)
 
 error_setspeed:
 error_tcsetattr:
-error_tcgetattr:
 error_read:
     tty_disconnect();
 error_open:

@@ -59,7 +59,9 @@ int main(int argc, char *argv[])
     options_parse_final(argc, argv);
 
     /* Configure tty device */
-    tty_configure();
+    // tty_configure();
+    tty_configure_from_fd(-1);
+
 
     /* Disable line buffering in stdout. This is necessary if we
      * want things like local echo to work correctly. */
