@@ -123,6 +123,7 @@ extern char ansi_format[];
         print_tainted = false; \
     } \
 }
+#define DEBUG
 
 #ifdef DEBUG
 #define tio_debug_printf(format, args...) \
